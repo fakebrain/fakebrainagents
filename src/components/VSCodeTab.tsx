@@ -32,6 +32,7 @@ npx maa logs --follow`;
 
 const config = `{
   "pipeline": ["ingestion", "parser", "analytics", "validator", "reporter"],
+  "formats": ["csv", "json", "txt", "docx", "doc", "xlsx", "xls", "pdf"],
   "parallel": 4,
   "retry": { "attempts": 2, "backoffMs": 800 },
   "outputs": ["*.analysis.json", "*.report.md", "*.annotated.*"],
@@ -72,9 +73,9 @@ export function VSCodeTab() {
       <p className="mt-2 max-w-2xl text-[13.5px] leading-relaxed text-fog-dim">
         Этот пульт — веб-лицо той же системы. В боевом режиме конвейер
         поднимается внутри VS Code: задача, CLI или конфиг ниже — и файлы из
-        папки <span className="font-mono text-tealx">./data</span> уходят в
-        анализ, а результаты появляются в{" "}
-        <span className="font-mono text-tealx">./reports</span>.
+        папки <span className="font-mono text-tealx">./data</span> (CSV, JSON,
+        TXT, DOCX, DOC, XLSX, XLS, PDF) уходят в анализ, а результаты появляются
+        в <span className="font-mono text-tealx">./reports</span>.
       </p>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr,1.25fr]">

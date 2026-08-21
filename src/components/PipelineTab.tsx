@@ -10,7 +10,7 @@ import {
   fmtBytes,
 } from "../lib/types";
 import { AgentUiState } from "./Chrome";
-import { IArrowRight, ICheck, IFile, IPlay } from "./icons";
+import { IArrowRight, ICheck, IFile, IPlay, IPlus } from "./icons";
 import { KindBadge } from "./ui";
 
 const qColor = (q: number) => (q >= 80 ? "#a9e35f" : q >= 55 ? "#ffb454" : "#ff7a6b");
@@ -21,6 +21,7 @@ export function PipelineTab({
   agentState,
   onFiles,
   onSample,
+  onGenerate,
   onOpenResult,
   onClear,
 }: {
@@ -29,6 +30,7 @@ export function PipelineTab({
   agentState: Record<AgentId, AgentUiState>;
   onFiles: (list: FileList | File[]) => void;
   onSample: (id: string) => void;
+  onGenerate: (what: "xlsx" | "docx") => void;
   onOpenResult: (id: string) => void;
   onClear?: () => void;
 }) {
@@ -98,7 +100,7 @@ export function PipelineTab({
             type="file"
             multiple
             hidden
-            accept=".csv,.tsv,.json,.txt,.md,.log"
+            accept=".csv,.tsv,.json,.txt,.md,.log,.doc,.docx,.xls,.xlsx,.pdf"
             onChange={(e) => {
               if (e.target.files?.length) onFiles(e.target.files);
               e.target.value = "";
@@ -121,11 +123,24 @@ export function PipelineTab({
             или нажмите — откроется проводник
           </p>
           <div className="mt-4 flex flex-wrap justify-center gap-1.5">
-            {["CSV", "TSV", "JSON", "TXT", "MD", "LOG"].map((f) => (
+            {(
+              [
+                ["CSV", "#2fd8c3"],
+                ["JSON", "#ffb454"],
+                ["TXT", "#56c8ff"],
+                ["DOCX", "#7fb0ff"],
+                ["DOC", "#a8c6ff"],
+                ["XLSX", "#a9e35f"],
+                ["XLS", "#79b344"],
+                ["PDF", "#ff7a6b"],
+              ] as const
+            ).map(([f, c]) => (
               <span
                 key={f}
-                className="rounded border border-line px-2 py-0.5 font-mono text-[10px] tracking-wider text-fog-dim"
+                className="inline-flex items-center gap-1.5 rounded border border-line px-2 py-0.5 font-mono text-[10px] font-semibold tracking-wider transition-colors hover:border-fog-faint/50"
+                style={{ color: c }}
               >
+                <span className="h-1 w-1 rounded-full" style={{ background: c }} />
                 {f}
               </span>
             ))}
@@ -160,6 +175,31 @@ export function PipelineTab({
                 />
               </button>
             ))}
+          </div>
+          <div className="mt-3 border-t border-line-soft pt-3">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-fog-faint">
+              сгенерировать в браузере
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <button
+                onClick={() => onGenerate("xlsx")}
+                className="group flex items-center justify-center gap-2 rounded-lg border border-limex/30 bg-limex/[0.06] px-3 py-2 font-mono text-[11.5px] font-semibold text-limex transition-all hover:-translate-y-px hover:border-limex/60 hover:bg-limex/10"
+              >
+                <IPlus size={13} className="transition-transform group-hover:rotate-90" />
+                демо XLSX
+              </button>
+              <button
+                onClick={() => onGenerate("docx")}
+                className="group flex items-center justify-center gap-2 rounded-lg border border-skyx/30 bg-skyx/[0.06] px-3 py-2 font-mono text-[11.5px] font-semibold text-skyx transition-all hover:-translate-y-px hover:border-skyx/60 hover:bg-skyx/10"
+              >
+                <IPlus size={13} className="transition-transform group-hover:rotate-90" />
+                демо DOCX
+              </button>
+            </div>
+            <p className="mt-2 text-[10.5px] leading-relaxed text-fog-faint">
+              Файлы собираются настоящими библиотеками (SheetJS, JSZip) и
+              проходят полный конвейер, включая проверку сигнатур.
+            </p>
           </div>
         </div>
       </div>

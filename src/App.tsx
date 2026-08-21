@@ -4,7 +4,27 @@ import { ArchitectureSection, Footer, IntegrationSection, TopBar } from "./compo
 import { PipelineTab } from "./components/PipelineTab";
 import { ResultTab } from "./components/ResultTab";
 import { VSCodeTab } from "./components/VSCodeTab";
-import { buildIssues, detectKind, downloadOutput, makeOutputs, runAnalysis } from "./lib/analysis";
+import {
+  analyzeCsv,
+  analyzeGrid,
+  analyzeJson,
+  analyzeTxt,
+  buildIssues,
+  detectKind,
+  downloadOutput,
+  makeOutputs,
+  parseCsvText,
+} from "./lib/analysis";
+import {
+  checkSignature,
+  extractDoc,
+  extractDocx,
+  extractPdf,
+  generateDemoDocx,
+  generateDemoXlsx,
+  readWorkbook,
+  signatureName,
+} from "./lib/extractors";
 import { SAMPLES } from "./lib/samples";
 import {
   AGENTS,
@@ -13,10 +33,10 @@ import {
   Issue,
   LogLine,
   MaaFile,
-  OutputFile,
   PIPE_AGENTS,
   StageState,
   fmtBytes,
+  isBinaryKind,
   uid,
 } from "./lib/types";
 
@@ -98,27 +118,71 @@ export default function App() {
     setStage(f.id, 0, "active");
     log("ingestion", `Читаю ${f.name} · ${fmtBytes(f.size)}`);
     await sleep(430 + rnd(280));
-    const kind = detectKind(f.name, f.raw);
+    const kind = detectKind(f.name, f.raw, !!f.buffer);
     if (kind === "binary") {
-      failFile(f, 0, "ingestion", "бинарный формат: конвейер работает с CSV / JSON / TXT");
+      failFile(
+        f,
+        0,
+        "ingestion",
+        "неподдерживаемый формат — конвейер работает с CSV, JSON, TXT, DOC, DOCX, XLS, XLSX, PDF"
+      );
       return false;
     }
     patchFile(f.id, { kind });
-    log("ingestion", `Целостность ОК · кодировка UTF-8 · формат: ${kind.toUpperCase()}`, "ok");
+    if (isBinaryKind(kind)) {
+      if (!f.buffer) {
+        failFile(f, 0, "ingestion", "нет бинарных данных файла");
+        return false;
+      }
+      if (!checkSignature(kind, f.buffer)) {
+        failFile(f, 0, "ingestion", `сигнатура контейнера не соответствует расширению .${kind}`);
+        return false;
+      }
+      log("ingestion", `Бинарный контейнер · сигнатура ${signatureName(kind)} подтверждена`, "ok");
+    } else {
+      log("ingestion", `Целостность ОК · кодировка UTF-8 · формат: ${kind.toUpperCase()}`, "ok");
+    }
     setStage(f.id, 0, "done");
 
     /* 2 · парсинг */
     setStage(f.id, 1, "active");
     log("parser", `Разбор структуры (${kind.toUpperCase()})…`);
     await sleep(520 + rnd(320));
+    let text = f.raw;
+    let grid: string[][] | undefined;
+    const meta: NonNullable<MaaFile["meta"]> = {};
     try {
       if (kind === "json") {
         JSON.parse(f.raw);
         log("parser", `Синтаксис корректен · ${fmtBytes(f.raw.length)}`, "ok");
       } else if (kind === "csv") {
-        const lines = f.raw.split(/\r?\n/).filter((l) => l.trim() !== "");
-        if (lines.length < 2) throw new Error("нет строк данных");
-        log("parser", `Таблица распознана: ${lines.length - 1} строк`, "ok");
+        const { rows } = parseCsvText(f.raw);
+        if (rows.length < 2) throw new Error("нет строк данных");
+        log("parser", `Таблица распознана: ${rows.length - 1} строк`, "ok");
+      } else if (kind === "xlsx" || kind === "xls") {
+        const wb = await readWorkbook(f.buffer as ArrayBuffer);
+        grid = wb.rows;
+        meta.sheet = wb.sheet;
+        log(
+          "parser",
+          `Книга Excel раскрыта: лист «${wb.sheet}» · ${wb.rows.length - 1} строк × ${wb.rows[0].length} колонок`,
+          "ok"
+        );
+      } else if (kind === "docx") {
+        const d = await extractDocx(f.buffer as ArrayBuffer);
+        text = d.text;
+        meta.paragraphs = d.paragraphs;
+        log("parser", `OOXML-контейнер распакован: ${d.paragraphs} абзацев текста`, "ok");
+      } else if (kind === "doc") {
+        const d = extractDoc(f.buffer as ArrayBuffer);
+        text = d.text;
+        meta.legacy = true;
+        log("parser", `Legacy-DOC: эвристическое извлечение · ${d.runs} фрагментов`, "warn");
+      } else if (kind === "pdf") {
+        const d = await extractPdf(f.buffer as ArrayBuffer);
+        text = d.text;
+        meta.pages = d.pages;
+        log("parser", `PDF: текстовый слой снят · страниц: ${d.pages}`, "ok");
       } else {
         const words = (f.raw.match(/\S+/g) ?? []).length;
         log("parser", `Сплошной текст · ${words} слов`, "ok");
@@ -127,6 +191,7 @@ export default function App() {
       failFile(f, 1, "parser", e instanceof Error ? e.message : "не удалось разобрать файл");
       return false;
     }
+    patchFile(f.id, { text, grid, meta });
     setStage(f.id, 1, "done");
 
     /* 3 · аналитика */
@@ -144,7 +209,23 @@ export default function App() {
     await sleep(420 + rnd(260));
     let analysis: AnyAnalysis;
     try {
-      analysis = runAnalysis(kind, f.raw);
+      if (grid) {
+        analysis = analyzeGrid(grid, { delimiter: "Excel", numDelim: ",", sheet: meta.sheet });
+      } else if (kind === "json") {
+        analysis = analyzeJson(f.raw);
+      } else if (kind === "csv") {
+        analysis = analyzeCsv(f.raw);
+      } else {
+        const sourceNote =
+          kind === "docx"
+            ? `DOCX · ${meta.paragraphs ?? "—"} абз.`
+            : kind === "doc"
+            ? "DOC · legacy-извлечение"
+            : kind === "pdf"
+            ? `PDF · ${meta.pages ?? "—"} стр.`
+            : undefined;
+        analysis = analyzeTxt(text, sourceNote);
+      }
     } catch (e) {
       failFile(f, 2, "analytics", e instanceof Error ? e.message : "ошибка вычисления метрик");
       return false;
@@ -165,7 +246,7 @@ export default function App() {
     setStage(f.id, 3, "active");
     log("validator", "Прогон правил качества…");
     await sleep(480 + rnd(300));
-    const cur = { ...f, kind, analysis };
+    const cur = { ...f, kind, analysis, text, grid, meta };
     const fileIssues = buildIssues(cur, analysis);
     fileIssues.slice(0, 6).forEach((i) => log("validator", i.text, "warn"));
     if (fileIssues.length === 0) log("validator", "Нарушений правил не найдено", "ok");
@@ -219,13 +300,14 @@ export default function App() {
     void runQueueRef.current();
   };
 
-  const enqueueRaw = (name: string, size: number, raw: string) => {
+  const enqueueRaw = (name: string, size: number, raw: string, buffer?: ArrayBuffer) => {
     const file: MaaFile = {
       id: uid(),
       name,
-      size: size || new Blob([raw]).size,
+      size: size || (buffer ? buffer.byteLength : new Blob([raw]).size),
       kind: "txt",
       raw,
+      buffer,
       status: "queued",
       stageIdx: -1,
       stages: Array(5).fill("pending") as StageState[],
@@ -239,18 +321,41 @@ export default function App() {
     kick();
   };
 
+  const BIN_EXT = ["doc", "docx", "xls", "xlsx", "pdf"];
+
   const onFiles = (list: FileList | File[]) =>
     Array.from(list).forEach((f) => {
+      const ext = f.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
       const reader = new FileReader();
-      reader.onload = () => enqueueRaw(f.name, f.size, String(reader.result ?? ""));
       reader.onerror = () => log("orchestrator", `Не удалось прочитать ${f.name}`, "error");
-      reader.readAsText(f);
+      if (BIN_EXT.includes(ext)) {
+        reader.onload = () => enqueueRaw(f.name, f.size, "", reader.result as ArrayBuffer);
+        reader.readAsArrayBuffer(f);
+      } else {
+        reader.onload = () => enqueueRaw(f.name, f.size, String(reader.result ?? ""));
+        reader.readAsText(f);
+      }
     });
 
   const onSample = (id: string) => {
     const s = SAMPLES.find((x) => x.id === id);
     if (!s) return;
     enqueueRaw(s.name, new Blob([s.content]).size, s.content);
+  };
+
+  const onGenerate = async (what: "xlsx" | "docx") => {
+    try {
+      log("orchestrator", `Генерация демо-файла ${what.toUpperCase()}…`);
+      if (what === "xlsx") {
+        const buf = await generateDemoXlsx();
+        enqueueRaw("демо_продажи.xlsx", buf.byteLength, "", buf);
+      } else {
+        const buf = await generateDemoDocx();
+        enqueueRaw("демо_техзадание.docx", buf.byteLength, "", buf);
+      }
+    } catch {
+      log("orchestrator", "Не удалось сгенерировать демо-файл", "error");
+    }
   };
 
   const clearAll = () => {
@@ -368,6 +473,7 @@ export default function App() {
                     agentState={agentState}
                     onFiles={onFiles}
                     onSample={onSample}
+                    onGenerate={onGenerate}
                     onOpenResult={openResult}
                     onClear={clearAll}
                   />
@@ -410,7 +516,7 @@ export default function App() {
           />
         </div>
         <p className="mt-3 text-center font-mono text-[10.5px] text-fog-faint">
-          пульт управления · перетащите CSV, JSON или TXT — шесть агентов сделают остальное
+          пульт управления · CSV, JSON, TXT, DOCX, DOC, XLSX, XLS, PDF — шесть агентов сделают остальное
         </p>
       </main>
 

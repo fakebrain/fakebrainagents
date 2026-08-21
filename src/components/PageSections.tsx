@@ -64,6 +64,31 @@ export function ArchitectureSection() {
             и своим следом в журнале. Оркестратор передаёт файл по цепочке: если
             этап упал, видно где именно и почему.
           </p>
+          <div className="mt-5 flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 font-mono text-[10px] uppercase tracking-[0.2em] text-fog-faint">
+              форматы:
+            </span>
+            {(
+              [
+                ["CSV", "#2fd8c3"],
+                ["JSON", "#ffb454"],
+                ["TXT", "#56c8ff"],
+                ["DOCX", "#7fb0ff"],
+                ["DOC", "#a8c6ff"],
+                ["XLSX", "#a9e35f"],
+                ["XLS", "#79b344"],
+                ["PDF", "#ff7a6b"],
+              ] as const
+            ).map(([f, c]) => (
+              <span
+                key={f}
+                className="rounded border border-line bg-abyss-900/70 px-2 py-1 font-mono text-[10.5px] font-semibold transition-all hover:-translate-y-0.5"
+                style={{ color: c, borderColor: `${c}40` }}
+              >
+                {f}
+              </span>
+            ))}
+          </div>
         </div>
       </Reveal>
 
@@ -162,7 +187,7 @@ export function IntegrationSection() {
       icon: <ICpu size={16} />,
       color: "#ffb454",
       title: "CLI в терминале",
-      text: "npx maa analyze — для скриптов, CI и обработки целых каталогов пакетом.",
+      text: "npx maa analyze — для скриптов, CI и пакетной обработки каталогов: CSV, JSON, TXT, Word, Excel и PDF.",
     },
     {
       icon: <ILayers size={16} />,
