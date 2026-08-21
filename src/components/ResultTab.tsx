@@ -36,7 +36,19 @@ function CsvBody({ a }: { a: CsvAnalysis }) {
           value={a.anomalies.length}
           color={a.anomalies.length ? "#ff7a6b" : "#a9e35f"}
         />
-        <StatChip label="Разделитель" value={a.delimiter === "\t" ? "TAB" : `«${a.delimiter}»`} />
+        <StatChip
+          label={a.sheet ? "Лист книги" : "Разделитель"}
+          value={
+            a.sheet
+              ? `«${a.sheet}»`
+              : a.delimiter === "\t"
+              ? "TAB"
+              : a.delimiter === "Excel"
+              ? "—"
+              : `«${a.delimiter}»`
+          }
+          color={a.sheet ? "#a9e35f" : undefined}
+        />
       </div>
 
       <Section title="статистика по колонкам">
@@ -280,6 +292,9 @@ export function ResultTab({
           <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11px] text-fog-faint">
             <span>{fmtBytes(file.size)}</span>
             {file.ms !== undefined && <span>обработан за {(file.ms / 1000).toFixed(1)} с</span>}
+            {a.kind === "csv" && a.sheet && <span className="text-limex">лист: {a.sheet}</span>}
+            {a.kind === "txt" && a.sourceNote && <span className="text-skyx">{a.sourceNote}</span>}
+            {file.meta?.legacy && <span className="text-amberx">legacy-извлечение</span>}
             <span>агентов: 6</span>
             <span style={{ color }}>
               качество: {a.quality >= 80 ? "высокое" : a.quality >= 55 ? "среднее" : "низкое"}

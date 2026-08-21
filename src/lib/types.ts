@@ -36,8 +36,8 @@ export const AGENTS: Record<AgentId, AgentDef> = {
     short: "ING",
     role: "приём и контроль",
     color: "#56c8ff",
-    action: "читает байты, проверяет кодировку",
-    desc: "Читает байты, проверяет целостность и кодировку, отсекает бинарные файлы, определяет формат и передаёт текст дальше по конвейеру.",
+    action: "читает байты, проверяет сигнатуры",
+    desc: "Читает байты, проверяет сигнатуры контейнеров (PDF, ZIP, CFB) и кодировку, определяет формат и передаёт данные дальше по конвейеру.",
     input: "raw-байты",
     output: "нормализованный текст",
   },
@@ -48,8 +48,8 @@ export const AGENTS: Record<AgentId, AgentDef> = {
     role: "разбор структуры",
     color: "#2fd8c3",
     action: "разбирает структуру",
-    desc: "Разбирает CSV (с кавычками и разделителями), JSON и сплошной текст в структурированное представление, сообщает об ошибках синтаксиса.",
-    input: "нормализованный текст",
+    desc: "Распаковывает контейнеры DOCX, XLSX и PDF, извлекает текст из legacy-DOC, разбирает CSV и JSON в структурированное представление, сообщает об ошибках синтаксиса.",
+    input: "нормализованные данные",
     output: "структура данных",
   },
   analytics: {
@@ -104,7 +104,23 @@ export const AGENT_LIST: AgentDef[] = [
   AGENTS.reporter,
 ];
 
-export type FileKind = "csv" | "json" | "txt" | "binary";
+export type FileKind =
+  | "csv"
+  | "json"
+  | "txt"
+  | "doc"
+  | "docx"
+  | "xls"
+  | "xlsx"
+  | "pdf"
+  | "binary";
+
+export const BINARY_KINDS: FileKind[] = ["doc", "docx", "xls", "xlsx", "pdf"];
+export const isBinaryKind = (k: FileKind): boolean => BINARY_KINDS.includes(k);
+export const isTabular = (k: FileKind): boolean =>
+  k === "csv" || k === "xlsx" || k === "xls";
+export const isDocument = (k: FileKind): boolean =>
+  k === "txt" || k === "doc" || k === "docx" || k === "pdf";
 
 export type StageState = "pending" | "active" | "done" | "error" | "skipped";
 
@@ -138,6 +154,10 @@ export interface MaaFile {
   size: number;
   kind: FileKind;
   raw: string;
+  buffer?: ArrayBuffer;
+  text?: string;
+  grid?: string[][];
+  meta?: { pages?: number; paragraphs?: number; sheet?: string; legacy?: boolean };
   status: "queued" | "processing" | "done" | "error";
   stageIdx: number;
   stages: StageState[];
@@ -176,6 +196,7 @@ export interface CsvAnalysis {
   missingPct: number;
   quality: number;
   preview: string[][];
+  sheet?: string;
 }
 
 export interface JsonAnalysis {
@@ -207,6 +228,7 @@ export interface TxtAnalysis {
   keywords: { word: string; count: number }[];
   quality: number;
   excerpt: string;
+  sourceNote?: string;
 }
 
 export const fmtBytes = (n: number): string => {
@@ -233,4 +255,9 @@ export const KIND_META: Record<
   csv: { label: "CSV", color: "#2fd8c3" },
   json: { label: "JSON", color: "#ffb454" },
   txt: { label: "TXT", color: "#56c8ff" },
+  docx: { label: "DOCX", color: "#7fb0ff" },
+  doc: { label: "DOC", color: "#a8c6ff" },
+  xlsx: { label: "XLSX", color: "#a9e35f" },
+  xls: { label: "XLS", color: "#79b344" },
+  pdf: { label: "PDF", color: "#ff7a6b" },
 };

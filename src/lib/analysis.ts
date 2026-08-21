@@ -16,14 +16,23 @@ import {
 
 const TEXT_EXT = ["csv", "tsv", "json", "txt", "md", "log"];
 
+const BINARY_EXT: Record<string, FileKind> = {
+  doc: "doc",
+  docx: "docx",
+  xls: "xls",
+  xlsx: "xlsx",
+  pdf: "pdf",
+};
+
 export function extOf(name: string): string {
   const m = name.toLowerCase().match(/\.([a-zа-яё0-9]+)$/);
   return m ? m[1] : "";
 }
 
-export function detectKind(name: string, raw: string): FileKind {
-  if (raw.includes("\u0000")) return "binary";
+export function detectKind(name: string, raw: string, hasBuffer = false): FileKind {
   const ext = extOf(name);
+  if (ext in BINARY_EXT) return BINARY_EXT[ext];
+  if (raw.includes("\u0000")) return "binary";
   if (ext === "csv" || ext === "tsv") return "csv";
   if (ext === "json") return "json";
   if (ext === "txt" || ext === "md" || ext === "log") return "txt";
@@ -32,6 +41,7 @@ export function detectKind(name: string, raw: string): FileKind {
   const firstLine = t.split(/\r?\n/, 1)[0] ?? "";
   if ((firstLine.match(/[,;\t]/g) ?? []).length >= 2) return "csv";
   if (ext && !TEXT_EXT.includes(ext)) return "binary";
+  if (hasBuffer) return "binary";
   return "txt";
 }
 
@@ -113,10 +123,23 @@ function stdDev(nums: number[], mean: number): number {
   return Math.sqrt(v);
 }
 
+export function parseCsvText(raw: string): { rows: string[][]; delimiter: string } {
+  const delimiter = detectDelimiter(raw.split(/\r?\n/, 1)[0] ?? ",");
+  return { rows: splitCsv(raw, delimiter), delimiter };
+}
+
 export function analyzeCsv(raw: string): CsvAnalysis {
-  const rows = splitCsv(raw, detectDelimiter(raw.split(/\r?\n/, 1)[0] ?? ","));
-  if (rows.length < 2) throw new Error("CSV пуст или не содержит строк данных");
-  const delimiter = detectDelimiter(rows[0].join(","));
+  const { rows, delimiter } = parseCsvText(raw);
+  return analyzeGrid(rows, { delimiter, numDelim: delimiter });
+}
+
+export function analyzeGrid(
+  rows: string[][],
+  opts: { delimiter?: string; numDelim?: string; sheet?: string } = {}
+): CsvAnalysis {
+  if (rows.length < 2) throw new Error("Таблица пуста или не содержит строк данных");
+  const delimiter = opts.delimiter ?? detectDelimiter(rows[0].join(","));
+  const delim = opts.numDelim ?? delimiter;
   const header = rows[0].map((h, i) => h.trim() || `колонка_${i + 1}`);
   const body = rows.slice(1);
   const cols = header.length;
@@ -126,7 +149,7 @@ export function analyzeCsv(raw: string): CsvAnalysis {
     const present = values.filter((v) => !isMissing(v));
     const missing = values.length - present.length;
 
-    const nums = present.map((v) => toNum(v, delimiter)).filter((n): n is number => n !== null);
+    const nums = present.map((v) => toNum(v, delim)).filter((n): n is number => n !== null);
     let type: ColumnStats["type"] = "строка";
     if (present.length > 0) {
       if (nums.length === present.length) type = "число";
@@ -176,7 +199,7 @@ export function analyzeCsv(raw: string): CsvAnalysis {
     if (col.type !== "число" || col.std === undefined || col.std === 0 || col.mean === undefined) return;
     body.forEach((r, ri) => {
       if (ci >= r.length || isMissing(r[ci])) return;
-      const n = toNum(r[ci], delimiter);
+      const n = toNum(r[ci], delim);
       if (n === null) return;
       const z = Math.abs((n - (col.mean as number)) / (col.std as number));
       if (z > 3 && anomalies.length < 14)
@@ -216,6 +239,7 @@ export function analyzeCsv(raw: string): CsvAnalysis {
     missingPct,
     quality,
     preview: rows.slice(0, 9),
+    sheet: opts.sheet,
   };
 }
 
@@ -359,7 +383,7 @@ const STOP = new Set(
   ).split(/\s+/)
 );
 
-export function analyzeTxt(raw: string): TxtAnalysis {
+export function analyzeTxt(raw: string, sourceNote?: string): TxtAnalysis {
   const text = raw.replace(/\r\n/g, "\n");
   const lines = text.split("\n");
   const nonEmpty = lines.filter((l) => l.trim() !== "");
@@ -414,6 +438,7 @@ export function analyzeTxt(raw: string): TxtAnalysis {
     keywords,
     quality,
     excerpt: text.slice(0, 700),
+    sourceNote,
   };
 }
 
@@ -421,7 +446,7 @@ export function runAnalysis(kind: FileKind, raw: string): AnyAnalysis {
   if (kind === "csv") return analyzeCsv(raw);
   if (kind === "json") return analyzeJson(raw);
   if (kind === "txt") return analyzeTxt(raw);
-  throw new Error("Бинарный файл не поддерживается конвейером");
+  throw new Error("Формат обрабатывается отдельным экстрактором конвейера");
 }
 
 /* ------------------------------------------------ issues */
@@ -452,6 +477,22 @@ export function buildIssues(file: MaaFile, a: AnyAnalysis): Issue[] {
     if (a.avgSentenceLen > 24) push("warn", `Длинные предложения в среднем: ${fmtNum(a.avgSentenceLen)} слов`);
     if (a.uniqueWords / Math.max(1, a.words) < 0.3) push("warn", "Низкое лексическое разнообразие (много повторов)");
   }
+
+  /* форматные предупреждения */
+  if (file.meta?.legacy)
+    push("warn", "Legacy-формат DOC: текст извлечён эвристически — возможна неполнота");
+  if (
+    file.kind === "pdf" &&
+    file.meta?.pages &&
+    a.kind === "txt" &&
+    a.chars / file.meta.pages < 250
+  )
+    push(
+      "warn",
+      `Низкая плотность текста: ~${Math.round(a.chars / file.meta.pages)} симв./стр. — возможен скан без текстового слоя`
+    );
+  if ((file.kind === "xlsx" || file.kind === "xls") && a.kind === "csv")
+    push("warn", `Проанализирован только первый лист книги: «${file.meta?.sheet ?? "—"}»`);
   return out;
 }
 
@@ -464,8 +505,7 @@ const escCsv = (v: string, delim: string) =>
     ? `"${v.replace(/"/g, '""')}"`
     : v;
 
-function enrichedCsv(raw: string, a: CsvAnalysis): string {
-  const rows = splitCsv(raw, a.delimiter);
+function enrichedCsv(rows: string[][], a: CsvAnalysis): string {
   const flagsByRow = new Map<number, string[]>();
   a.anomalies.forEach((an) => {
     const list = flagsByRow.get(an.row) ?? [];
@@ -576,6 +616,7 @@ export function buildReport(name: string, a: AnyAnalysis, issues: Issue[]): stri
 
   if (a.kind === "csv") {
     L.push("## Датасет");
+    if (a.sheet) L.push(`- Источник: книга Excel, лист **${a.sheet}**`);
     L.push(`- Строк: **${a.rows}**, колонок: **${a.cols}**, разделитель: \`${a.delimiter === "\t" ? "TAB" : a.delimiter}\``);
     L.push(`- Пропущено ячеек: ${a.totalMissing} (${fmtNum(a.missingPct)}%)`);
     L.push(`- Дубликаты строк: ${a.duplicates}`);
@@ -617,6 +658,7 @@ export function buildReport(name: string, a: AnyAnalysis, issues: Issue[]): stri
     }
   } else {
     L.push("## Текст");
+    if (a.sourceNote) L.push(`- Источник: ${a.sourceNote}`);
     L.push(`- Слов: **${a.words}** (уникальных: ${a.uniqueWords}), символов: ${a.chars}`);
     L.push(`- Предложений: ${a.sentences}, строк: ${a.lines}`);
     L.push(`- Средняя длина слова: ${fmtNum(a.avgWordLen)}, предложения: ${fmtNum(a.avgSentenceLen)} слов`);
@@ -659,12 +701,13 @@ export function makeOutputs(file: MaaFile, a: AnyAnalysis, issues: Issue[]): Out
 
   const report = buildReport(file.name, a, issues);
 
+  const gridRows = file.grid ?? parseCsvText(file.raw).rows;
   const enriched =
     a.kind === "csv"
-      ? enrichedCsv(file.raw, a)
+      ? enrichedCsv(gridRows, a)
       : a.kind === "json"
       ? enrichedJson(file.raw, a)
-      : enrichedTxt(file.raw, a);
+      : enrichedTxt(file.text ?? file.raw, a);
   const enrichedExt = a.kind === "csv" ? "csv" : a.kind === "json" ? "json" : "txt";
 
   return [
